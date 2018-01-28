@@ -1,0 +1,313 @@
+---
+title: "Compare StepOne vs QuantaStudio for Ssid samples"
+author: "AnaPalacio"
+date: "Jan 26, 2018"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+
+```{r setup, include=FALSE,}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE, fig_width= 5, fig.height =3)
+```
+
+General project set-up 
+
+```{r libraries , results="hide"}
+# Get all libraries and sources required to run the script
+        source("STEPoneFunction.R")# R.Cunning steponeR function
+        library(plyr)
+        library(dplyr)
+        library(reshape2)
+        library(ggplot2)
+        library(lme4)
+        library(ggthemes)
+      
+```
+
+# 1. Calculate qPCR RATIOS (Symbiont/Coral) 
+
+Get the raw data for Ssid R.Cunning steponeR function:
+
+* Get list of plate files to read
+* Calculate the ratios
+* Extract the results
+
+```{r CalculateRatios}
+
+  Ssid.plates <- list.files(path="Data", pattern=".csv", 
+                           full.names=TRUE, recursive = TRUE)
+  # Ssid.plates
+
+  # Run stepone function to get Ratios
+  
+  Ssid.Out <- steponeR(files=Ssid.plates, target.ratios=c("C.Ssid", "D.Ssid"), 
+                       fluor.norm=list(C=0, D=0, Ssid=0),
+                       copy.number=list(C=1, D=1, Ssid=1),
+                       ploidy=list(C=1, D=1, Ssid=2),
+                       extract=list(C=0.813, D=0.813, Ssid=0.982))
+  
+  # Target ratio results
+  Ssid<-Ssid.Out$result
+  
+```
+
+# 2. Data CLEANING
+
+```{r DataCleaning}
+  # 1. Check and remove NTC wells
+    ntc <- Ssid[which(Ssid$Sample.Name=="NTC"), ]
+    Ssid <- droplevels(Ssid[!rownames(Ssid) %in% rownames(ntc), ])
+    
+  # 2. Check and remove + Control wells
+    Positive <- Ssid[which(Ssid$Sample.Name=="+"| Ssid$Sample.Name=="Sample 1"), ]
+    Ssid <- droplevels(Ssid[!rownames(Ssid) %in% rownames(Positive), ])
+    
+  # 3. Create unique sample ID+FileName to relabel samples  
+    Ssid$Sample.Plate<-paste(Ssid$Sample.Name,Ssid$File.Name, sep="_")
+
+  # 4.If Clade only detected in one technical replicate, set its ratio to NA
+    One.C<- Ssid[which(Ssid$C.reps==1),]
+    Ssid$C.Ssid[which(Ssid$C.reps==1)] <- NA
+    
+    One.D<- Ssid[which(Ssid$D.reps==1),]
+    Ssid$D.Ssid[which(Ssid$D.reps==1)] <- NA
+
+  # 5. Make NA=0
+     # colnames(Ssid)[which(colnames(Ssid) %in% "A.Ssid")] <- "A.SH"  
+     Ssid$C.Ssid[is.na(Ssid$C.Ssid)] <- 0
+     Ssid$D.Ssid[is.na(Ssid$D.Ssid)] <- 0
+        
+  # 6.If coral detected in one technical replicate, remove the sample
+    ReRun.Coral <- Ssid[which(Ssid$Ssid.reps==1), ]
+    Ssid <- droplevels(Ssid[!rownames(Ssid) %in% rownames(ReRun.Coral), ])
+   
+```
+    
+# 3. Get the cell ratios and log 10 transformations
+
+```{r}
+    # Total SH
+        Ssid$TotalSH<-(Ssid$C.Ssid + Ssid$D.Ssid)
+    
+    # Log 10
+        Ssid$logC.SH <- log10(Ssid$C.Ssid)
+        Ssid$logD.SH <- log10(Ssid$D.Ssid)
+        Ssid$logSH<-log10(Ssid$TotalSH)
+        
+
+```    
+
+Data summary 
+
+```{r Summary} 
+
+summary(Ssid)
+# StepOne and Quanta mean CT values and mean SD  
+
+Ssid %>%
+  group_by(File.Name) %>%
+  summarise(meanC = mean(C.CT.mean, na.rm=TRUE),
+            meanD = mean(D.CT.mean, na.rm=TRUE),
+            meanSsid = mean(Ssid.CT.mean),
+            SD_C = mean(C.CT.sd, na.rm=TRUE), 
+            SD_D = mean(D.CT.sd, na.rm=TRUE), 
+            Sd_Ssid = mean(Ssid.CT.sd), n = n())
+
+ # density Plots
+        
+    DenSH<- ggplot(Ssid, aes(TotalSH, fill = File.Name , colour = File.Name)) +
+            geom_density(alpha = 0.1)
+    DenSH
+      
+    DenSidCT<-ggplot(Ssid, aes(Ssid.CT.mean, fill = File.Name , colour = File.Name)) +
+            geom_density(alpha = 0.1)
+    DenSidCT
+    
+    DenC_CT<-ggplot(Ssid, aes(C.CT.mean, fill = File.Name , colour = File.Name)) +
+            geom_density(alpha = 0.1)
+    DenC_CT
+    
+    DenD_CT<-ggplot(Ssid, aes(D.CT.mean, fill = File.Name , colour = File.Name)) +
+            geom_density(alpha = 0.1)
+    DenD_CT
+
+```
+
+# 4. Tests for "teatment" = machine effects 
+
+```{r Test}
+
+# Total (log10) SH 
+    # T test
+        PLate_SH <-t.test(logSH ~ File.Name, data = Ssid)   
+        PLate_SH
+        
+    # or (lm with Sample nested?)  
+        library(nlme)
+        
+        SH_LM<-lme(logSH ~ File.Name, random=~1|Sample.Name,
+                    data=Ssid,
+                    method="REML")
+        anova.lme(SH_LM)
+        summary(SH_LM)
+       # coef(PLate_SH)
+       # layout(matrix(1:4,2,2))  
+       # plot(PLate_SH)  
+    
+    logSH <- ggplot(Ssid, aes (File.Name, logSH, colour=factor(File.Name))) +
+      stat_summary(fun.data = "mean_cl_boot",geom = "errorbar", width = 0.2)+
+      stat_summary(fun.y=mean, geom="point", size =3, alpha=0.5) + theme_gdocs() +
+      geom_jitter()
+    logSH  
+
+# Ssid (SYBR) CT means
+    
+    # T test
+        PLate_Ssid <-t.test(Ssid.CT.mean ~ File.Name, data = Ssid)   
+        PLate_Ssid
+
+      Ssid_SYBER <- ggplot(Ssid, aes (File.Name, Ssid.CT.mean, colour=factor(File.Name))) +
+        stat_summary(fun.data = "mean_cl_boot",geom = "errorbar", width = 0.2)+
+        stat_summary(fun.y=mean, geom="point", size =3, alpha=0.5) + theme_gdocs() +
+        geom_jitter()
+      Ssid_SYBER
+
+
+# C (VIC) CT means
+      
+    # T test
+      PLate_C <-t.test(C.CT.mean ~ File.Name, data = Ssid) 
+      PLate_C
+   
+      C_VIC <- ggplot(Ssid, aes (File.Name, C.CT.mean, colour=factor(File.Name))) +
+        stat_summary(fun.data = "mean_cl_boot",geom = "errorbar", width = 0.2)+
+        stat_summary(fun.y=mean, geom="point", size =3, alpha=0.5) + theme_gdocs() +
+        geom_jitter()
+      C_VIC
+  
+ # D (FAM) CT means
+      
+    # T test
+    
+      PLate_C <-t.test(D.CT.mean ~ File.Name, data = Ssid) 
+      PLate_C
+      
+      D_VIC <- ggplot(Ssid, aes (File.Name, D.CT.mean, colour=factor(File.Name))) +
+        stat_summary(fun.data = "mean_cl_boot",geom = "errorbar", width = 0.2)+
+        stat_summary(fun.y=mean, geom="point", size =3, alpha=0.5) + theme_gdocs() +
+        geom_jitter()
+      D_VIC
+```
+
+
+## 5. Exploratory graphs - Comparision bw rxn in each sample: 
+
+```{r Graphs}
+
+library("ggthemes")
+library("scales")
+
+Tot_SH <- ggplot(Ssid, aes(Sample.Name , TotalSH)) +
+  geom_point(aes(colour=factor(File.Name)))  + theme_gdocs() + 
+  xlab("Sample") + ylab("S:H cell ratio") + theme(axis.text.x = element_blank())
+Tot_SH
+
+LogTot_SH <- ggplot(Ssid, aes(Sample.Name , logSH )) +
+  geom_point(aes(colour=factor(File.Name)))  + theme_gdocs() + 
+  xlab("Sample") + ylab("Log10 (S:H cell ratio)") + theme(axis.text.x = element_blank())
+LogTot_SH
+
+C_SH <- ggplot(Ssid, aes(Sample.Name , C.Ssid)) +
+   geom_point(aes(colour=factor(File.Name)))  + theme_gdocs() +
+   xlab("Sample") + ylab("C:H cell ratio") + theme(axis.text.x = element_blank())
+C_SH
+
+D_SH <- ggplot(Ssid, aes(Sample.Name , D.Ssid)) +
+   geom_point(aes(colour=factor(File.Name)))  + theme_gdocs()+
+  xlab("Sample") + ylab("D:H cell ratio") + theme(axis.text.x = element_blank())
+D_SH
+ 
+Ssid_CT <- ggplot(Ssid, aes(Sample.Name , Ssid$Ssid.CT.mean)) +
+   geom_point(aes(colour=factor(File.Name)))  + theme_gdocs()  +
+   xlab("Sample") + theme(axis.text.x = element_blank()) + scale_y_continuous(name="Ssid CT mean", breaks=seq(19,40,0.5))
+Ssid_CT
+ 
+C_CT <- ggplot(Ssid, aes(Sample.Name , Ssid$C.CT.mean)) +
+   geom_point(aes(colour=factor(File.Name)))  + theme_gdocs()  +
+   xlab("Sample") + theme(axis.text.x = element_blank()) + scale_y_continuous(name="C CT mean", breaks=seq(19,40,1))
+C_CT
+ 
+D_CT <- ggplot(Ssid, aes(Sample.Name , Ssid$D.CT.mean)) +
+   geom_point(aes(colour=factor(File.Name)))  + theme_gdocs() +
+   xlab("Sample")+ theme(axis.text.x = element_blank()) + scale_y_continuous(name="D CT mean", breaks=seq(19,40,1))
+D_CT
+
+```
+# Differences bw the CTs in each machine
+
+``` {r}
+
+Data.Wide<- reshape(Ssid, idvar = "Sample.Name", timevar = "File.Name", direction = "wide")
+
+# CTs Differences
+    
+    Data.Wide$Ssid_Diff<-(Data.Wide$Ssid.CT.mean.Quanta.csv-Data.Wide$Ssid.CT.mean.StepOne.csv)
+      summary(Data.Wide$Ssid_Diff)
+    
+    Data.Wide$C_Diff<-(Data.Wide$C.CT.mean.Quanta.csv-Data.Wide$C.CT.mean.StepOne.csv)
+      summary(Data.Wide$C_Diff)
+      
+    Data.Wide$D_Diff<-(Data.Wide$D.CT.mean.Quanta.csv-Data.Wide$D.CT.mean.StepOne.csv)
+      summary(Data.Wide$D_Diff)
+      
+  # Graphs 
+      
+    Ssid_CT_Diff_A <- ggplot(Data.Wide, aes(Ssid.CT.mean.StepOne.csv , Data.Wide$Ssid_Diff)) +
+          geom_point()  + theme_gdocs() + geom_hline(yintercept =0) +
+          xlab("StepOne_Ssid CT") +  geom_smooth(method="lm") +
+          scale_y_continuous(name=" Ssid (SYBR) CT difference (Quanta-StepOne)",breaks=seq(-2,3,0.5))
+    Ssid_CT_Diff_A
+    
+    SYBR_CT<-lm (Ssid_Diff ~ Ssid.CT.mean.StepOne.csv, data=Data.Wide)
+    summary(SYBR_CT)
+    
+    Ssid_CT_Diff <- ggplot(Data.Wide, aes(Ssid.CT.mean.Quanta.csv , Data.Wide$Ssid_Diff)) +
+          geom_point()  + theme_gdocs() + geom_hline(yintercept =0) +
+          xlab("StepOne_Ssid CT") +  geom_smooth(method="lm") +
+          scale_y_continuous(name=" Ssid (SYBR) CT difference (Quanta-StepOne)",breaks=seq(-2,3,0.5))
+    Ssid_CT_Diff
+    
+    C_CT_Diff <- ggplot(Data.Wide, aes(C.CT.mean.StepOne.csv , Data.Wide$C_Diff)) +
+          geom_point()  + theme_gdocs() + geom_hline(yintercept =0) + xlab("StepOne_C CT") +  
+          scale_y_continuous(name="C (VIC) CT difference (Quanta-StepOne)", breaks=seq(-2,6,0.5))
+    C_CT_Diff
+        
+    D_CT_Diff <- ggplot(Data.Wide, aes(D.CT.mean.StepOne.csv , Data.Wide$D_Diff)) +
+          geom_point()  + theme_gdocs()  + geom_hline(yintercept =0) + xlab("StepOne_D CT") + 
+          scale_y_continuous(name="D (FAM) CT difference (Quanta- StepOne)", breaks=seq(-3,1,0.5))
+    D_CT_Diff
+        
+    
+# SH Differences    
+
+# Data.Wide$C_Host_Diff<-(Data.Wide$C.Ssid.Quanta.csv-Data.Wide$C.Ssid.StepOne.csv)
+# Data.Wide$D_Host_Diff<-(Data.Wide$D.Ssid.Quanta.csv-Data.Wide$D.Ssid.StepOne.csv)
+# Data.Wide$TotalSH_Diff<-(Data.Wide$Ssid.CT.mean.Quanta.csv-Data.Wide$Ssid.CT.mean.StepOne.csv) 
+# 
+# SH_Diff <- ggplot(Data.Wide, aes(Sample.Name, TotalSH_Diff)) +
+#        geom_point()  + theme_gdocs() + geom_hline(yintercept =0) +
+#       xlab("Sample") + theme(axis.text.x = element_blank()) +
+#       scale_y_continuous(name="SH cell ratio difference (Quanta-StepOne)",   breaks=seq(-0.5,1,0.2))
+# SH_Diff
+#     
+# CH_Diff <- ggplot(Data.Wide, aes(Sample.Name,  C_Host_Diff)) +
+#       geom_point() + xlab("Sample") +  theme(axis.text.x = element_blank()) +
+#       scale_y_continuous(name="CH cell ratio difference (Quanta-StepOne)", breaks=seq(-0.5,1,0.2)) +
+#       theme_gdocs() + geom_hline(yintercept =0)
+# CH_Diff
+    
+```
+    
+
